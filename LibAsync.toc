@@ -1,0 +1,6 @@
+## Interface: 100105
+## Title: LibAsync
+## Author: Nnoggie
+## Notes: WoW library for running code asynchronously
+
+LibAsync.xml
