@@ -1,6 +1,7 @@
 # LibAsync
 
 WoW library for running code asynchronously.
+The code of the Library is based on the coroutine handler found in WeakAuras.
 
 Due to the nature of WoW, this library is not truly asynchronous, but it does allow you to run code in a way that will not block the main thread. This is useful for running code that may take a long time to execute, such as iterating over a large table.
 
