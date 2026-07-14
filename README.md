@@ -28,6 +28,19 @@ handler:Async(function()
 end, "MyAsyncFunction")
 ```
 
+### Waiting for callbacks
+
+Use `Await` inside an async task to suspend it until a callback fires. Waiting tasks consume no frame time.
+
+```lua
+handler:Async(function()
+    local result = LibStub("LibAsync"):Await(function(resolve)
+        SomeAsyncAPI(resolve)
+    end)
+    print(result)
+end, "MyCallbackFunction")
+```
+
 ### Optional
 
 You can also pass a config table when creating the handler that can define the following options:

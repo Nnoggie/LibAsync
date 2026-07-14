@@ -1,5 +1,6 @@
 --- @class LibAsync : table
 --- @field GetHandler fun(self, config: LibAsyncConfig | nil) : LibAsyncHandler
+--- @field Await fun(self, register: fun(resolve: function)): any, any
 
 --- @class LibAsyncConfig
 --- @field type "everyFrame" The type of handler to create.
@@ -18,7 +19,7 @@ local LibAsync
 
 do
   local _MAJOR = "LibAsync"
-  local _MINOR = 3
+  local _MINOR = 4
   if LibStub then
     local lib, minor = LibStub:GetLibrary(_MAJOR, true)
     if lib and minor and minor >= _MINOR then
@@ -33,72 +34,39 @@ do
   LibAsync._MINOR = _MINOR
 end
 
+local awaitToken = {}
+local unpack = unpack or table.unpack
+
+local function pack(...)
+  return { n = select("#", ...), ... }
+end
+
+local function returnError(message)
+  return message
+end
+
+--- Suspend the current LibAsync task until resolve is called.
+--- @param register fun(resolve: function)
+--- @return any ...
+function LibAsync:Await(register)
+  if type(register) ~= "function" then
+    error("LibAsync:Await requires a function.", 2)
+  end
+  local result = pack(coroutine.yield(awaitToken, register))
+  if not result[1] then
+    error(result[2] or "LibAsync await failed.", 0)
+  end
+  return unpack(result, 2, result.n)
+end
+
+---@format disable
 local bytetoB64 = {
-  [0] = "a",
-  "b",
-  "c",
-  "d",
-  "e",
-  "f",
-  "g",
-  "h",
-  "i",
-  "j",
-  "k",
-  "l",
-  "m",
-  "n",
-  "o",
-  "p",
-  "q",
-  "r",
-  "s",
-  "t",
-  "u",
-  "v",
-  "w",
-  "x",
-  "y",
-  "z",
-  "A",
-  "B",
-  "C",
-  "D",
-  "E",
-  "F",
-  "G",
-  "H",
-  "I",
-  "J",
-  "K",
-  "L",
-  "M",
-  "N",
-  "O",
-  "P",
-  "Q",
-  "R",
-  "S",
-  "T",
-  "U",
-  "V",
-  "W",
-  "X",
-  "Y",
-  "Z",
-  "0",
-  "1",
-  "2",
-  "3",
-  "4",
-  "5",
-  "6",
-  "7",
-  "8",
-  "9",
-  "(",
-  ")"
+  [0] = "a", "b", "c", "d", "e", "f", "g", "h", "i", "j", "k", "l", "m", "n", "o", "p",
+        "q", "r", "s", "t", "u", "v", "w", "x", "y", "z", "A", "B", "C", "D", "E", "F",
+        "G", "H", "I", "J", "K", "L", "M", "N", "O", "P", "Q", "R", "S", "T", "U", "V",
+        "W", "X", "Y", "Z", "0", "1", "2", "3", "4", "5", "6", "7", "8", "9", "(", ")"
 }
+---@format enable
 
 local function getUniqueId(length)
   local s = {}
@@ -115,6 +83,17 @@ local function createHandler(config)
   handler.frame = CreateFrame("Frame")
   handler.update = {}
   handler.size = 0
+  local waiting = {}
+  local resumeArgs = {}
+
+  local function hasRunnableTasks()
+    for _, func in pairs(handler.update) do
+      if not waiting[func] then
+        return true
+      end
+    end
+    return false
+  end
 
   function handler.Async(self, func, name, singleton)
     if singleton then
@@ -134,7 +113,10 @@ local function createHandler(config)
   end
 
   function handler.CancelAsync(self, name)
-    if handler.update[name] then
+    local func = handler.update[name]
+    if func then
+      waiting[func] = nil
+      resumeArgs[func] = nil
       handler.update[name] = nil;
       handler.size = handler.size - 1
       if handler.size == 0 then
@@ -156,19 +138,53 @@ local function createHandler(config)
         hasData = false;
         -- Resume all coroutines
         for name, func in pairs(handler.update) do
-          hasData = true;
-          -- Resume or remove
-          if coroutine.status(func) ~= "dead" then
-            local ok, msg = coroutine.resume(func)
-            if not ok then
-              -- default error handler only takes msg
-              -- we add debugstack and name to custom error handlers
-              config.errorHandler(msg, debugstack(func), name)
+          if not waiting[func] then
+            hasData = true;
+            -- Resume or remove
+            if coroutine.status(func) ~= "dead" then
+              local ok, yielded, register
+              local args = resumeArgs[func]
+              resumeArgs[func] = nil
+              if args then
+                ok, yielded, register = coroutine.resume(func, unpack(args, 1, args.n))
+              else
+                ok, yielded, register = coroutine.resume(func)
+              end
+
+              if not ok then
+                -- default error handler only takes msg
+                -- we add debugstack and name to custom error handlers
+                config.errorHandler(yielded, debugstack(func), name)
+                handler:CancelAsync(name)
+              elseif coroutine.status(func) == "dead" then
+                handler:CancelAsync(name)
+              elseif yielded == awaitToken then
+                waiting[func] = true
+                local resolved = false
+                local function resumeAwait(...)
+                  if resolved or handler.update[name] ~= func then return end
+                  resolved = true
+                  waiting[func] = nil
+                  resumeArgs[func] = pack(...)
+                  handler.frame:Show()
+                end
+                local registered, err = xpcall(function()
+                  register(function(...)
+                    resumeAwait(true, ...)
+                  end)
+                end, returnError)
+                if not registered then
+                  resumeAwait(false, err)
+                end
+              end
+            else
+              handler:CancelAsync(name);
             end
-          else
-            handler:CancelAsync(name);
           end
         end
+      end
+      if not hasRunnableTasks() then
+        handler.frame:Hide()
       end
     end);
   end
